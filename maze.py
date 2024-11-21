@@ -212,28 +212,10 @@ class MazeEnvironment:
 
         return surroundings
 
-    def get_valid_moves(self, agent) -> List[Tuple[int, int, float]]:
-        """
-        Get valid moves for an agent
-        """
-        valid_moves = []
-        directions = [(0, -1), (1, 0), (0, 1), (-1, 0)]
-
-        for dx, dy in directions:
-            new_x = agent.x + dx
-            new_y = agent.y + dy
-            if (0 <= new_x < self.width and
-                0 <= new_y < self.height and
-                self.maze[new_y, new_x] != WALL_VALUE):
-                valid_moves.append((new_x, new_y, self.maze[new_y, new_x]))
-
-        return valid_moves
-
     def update(self):
         """Update all agents"""
         for agent in self.agents:
             maze_info = {
                 'surroundings': self.get_agent_surroundings(agent),
-                'valid_moves': self.get_valid_moves(agent)
             }
             agent.update(maze_info)
