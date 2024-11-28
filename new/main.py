@@ -37,7 +37,9 @@ class Ant:
         self.carrying_food = False
         self.target_food: Optional[Food] = None
         self.env = environment
-        self.memory: List[Tuple[int, int]] = []
+        self.memory = []
+        self.path_home = []
+        self.last_food_location = None
         self.visited_cells: Set[Tuple[int, int]] = set()
         self.known_walls: Set[Tuple[int, int]] = set()
         self.path_to_food: List[Tuple[int, int]] = []
@@ -126,72 +128,87 @@ class Ant:
         # If no pheromone nearby, move randomly
         return self.find_valid_direction()
 
+    def _find_path_to_target(self, target_x: int, target_y: int) -> List[Tuple[int, int]]:
+        """New: Simple A* pathfinding to target"""
+        from queue import PriorityQueue
+
+        def heuristic(x1, y1):
+            return abs(x1 - target_x) + abs(y1 - target_y)
+
+        frontier = PriorityQueue()
+        frontier.put((0, (self.x, self.y)))
+        came_from = {(self.x, self.y): None}
+        cost_so_far = {(self.x, self.y): 0}
+
+        while not frontier.empty():
+            current = frontier.get()[1]
+
+            if current == (target_x, target_y):
+                break
+
+            for dx, dy in SURROUNDINGS:
+                next_pos = (current[0] + dx, current[1] + dy)
+                if not self._check_bounds(next_pos[0], next_pos[1]):
+                    continue
+
+                new_cost = cost_so_far[current] + 1
+                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                    cost_so_far[next_pos] = new_cost
+                    priority = new_cost + heuristic(next_pos[0], next_pos[1])
+                    frontier.put((priority, next_pos))
+                    came_from[next_pos] = current
+
+        # Reconstruct path
+        path = []
+        current = (target_x, target_y)
+        while current in came_from and came_from[current] is not None:
+            path.append(current)
+            current = came_from[current]
+        return path[::-1]
+
     def explore(self):
-        food_range = self._food_in_range()
-        if food_range is not None:
-            if food_range == "HERE":
-                self.collect_food()
+        """Improved exploring behavior"""
+        food_status = self._food_in_range()
+
+        if food_status == "HERE":
+            self.last_food_location = (self.x, self.y)
+            self.path_home = self._find_path_to_target(self.env.nest_location[0], self.env.nest_location[1])
+            self.collect_food()
+            return
+
+        if food_status == "NEARBY" and self.target_food:
+            # Path to nearby food
+            path = self._find_path_to_target(self.target_food.x, self.target_food.y)
+            if path:
+                next_pos = path[0]
+                self.move(next_pos[0], next_pos[1])
                 return
-            elif food_range == "NEARBY" and self.target_food:
-                dx = max(-1, min(1, self.target_food.x - self.x))
-                dy = max(-1, min(1, self.target_food.y - self.y))
-                next_x = self.x + dx
-                next_y = self.y + dy
-                self.move(next_x, next_y)
-                return
-        # No food in range - Follow pheromone trails
-        dx, dy = self._find_best_direction_to_explore()
-        next_x = self.x + dx
-        next_y = self.y + dy
+
+        # Follow pheromones or explore randomly
+        best_direction = self._find_best_direction_to_explore()
+        next_x = self.x + best_direction[0]
+        next_y = self.y + best_direction[1]
         self.move(next_x, next_y)
 
     def _reached_nest(self) -> bool:
         return self.x == self.env.nest_location[0] and self.y == self.env.nest_location[1]
 
     def _find_best_direction_to_nest(self) -> Tuple[int, int]:
-        # First try to use memory to backtrack
-        if self.memory:
-            # Get the last few positions and find one that's closer to the nest
-            for prev_pos in reversed(self.memory[-10:]):  # Look at last 10 positions
-                dx = prev_pos[0] - self.x
-                dy = prev_pos[1] - self.y
-                if dx == 0 and dy == 0:
-                    continue  # Skip if it doesn't result in movement
-                if abs(dx) <= 1 and abs(dy) <= 1:  # If it's an adjacent cell
-                    if self._check_bounds(self.x + dx, self.y + dy):
-                        return dx, dy
+        # Move directly towards the nest
+        dx = max(-1, min(1, self.env.nest_location[0] - self.x))
+        dy = max(-1, min(1, self.env.nest_location[1] - self.y))
 
-        # If memory doesn't help, use pheromones
-        best_direction = (0, 0)
-        highest_pheromone = -1
-        current_dist_to_nest = abs(self.x - self.env.nest_location[0]) + abs(self.y - self.env.nest_location[1])
+        # If direct path is available, use it
+        if self._check_bounds(self.x + dx, self.y + dy):
+            return dx, dy
 
-        for dx, dy in SURROUNDINGS:
-            next_x = self.x + dx
-            next_y = self.y + dy
+        # If direct path is blocked, try horizontal or vertical movement
+        if dx != 0 and self._check_bounds(self.x + dx, self.y):
+            return dx, 0
+        if dy != 0 and self._check_bounds(self.x, self.y + dy):
+            return 0, dy
 
-            if not self._check_bounds(next_x, next_y):
-                continue
-
-            # Calculate if this move brings us closer to the nest
-            new_dist_to_nest = abs(next_x - self.env.nest_location[0]) + abs(next_y - self.env.nest_location[1])
-            closer_to_nest = new_dist_to_nest < current_dist_to_nest
-
-            # Check pheromone level at this position
-            pheromone = self.env.pheromone_layer.get((next_x, next_y), 0)
-
-            # Prefer positions that are closer to nest and have higher pheromone
-            if closer_to_nest and pheromone > highest_pheromone:
-                highest_pheromone = pheromone
-                best_direction = (dx, dy)
-
-        # If no good direction found, move directly towards the nest
-        if best_direction == (0, 0):
-            dx = max(-1, min(1, self.env.nest_location[0] - self.x))
-            dy = max(-1, min(1, self.env.nest_location[1] - self.y))
-            if self._check_bounds(self.x + dx, self.y + dy):
-                return dx, dy
-        # If direct path is blocked, move randomly
+        # If all direct paths are blocked, move randomly
         return self.find_valid_direction()
 
     def update_pheromones(self):
@@ -201,49 +218,56 @@ class Ant:
         self.env.pheromone_layer[pos] = min(MAX_PHEROMONE, current_strength + deposit_amount)
 
     def return_to_nest(self):
-        # Update pheromone at current position
+        """Improved return behavior"""
         self.update_pheromones()
-        # Find best direction to nest using pheromones and memory
-        dx, dy = self._find_best_direction_to_nest()
-        next_x = self.x + dx
-        next_y = self.y + dy
 
-        # Move one cell closer to nest
-        self.move(next_x, next_y)
+        if not self.path_home:
+            self.path_home = self._find_path_to_target(self.env.nest_location[0], self.env.nest_location[1])
 
-        # Check if reached nest
+        if self.path_home:
+            next_pos = self.path_home[0]
+            self.path_home = self.path_home[1:]
+            self.move(next_pos[0], next_pos[1])
+
         if self._reached_nest():
             self.carrying_food = False
             self.env.nest_food += 1
-            # If there's still food, go back to it using stored path
-            if self.target_food and self.target_food.value > 0:
+
+            # If we remember where we found food and it still has value, go back
+            if self.last_food_location and any(
+                f.value > 0 and f.x == self.last_food_location[0] and f.y == self.last_food_location[1]
+                for f in self.env.food
+            ):
                 self.state = AntState.BACK_TO_FOOD
-                self.path_to_food.reverse()  # Reverse path to follow it back
+                self.path_to_food = self._find_path_to_target(self.last_food_location[0], self.last_food_location[1])
             else:
                 self.state = AntState.EXPLORING
                 self.target_food = None
-                self.path_to_food.clear()
+                self.last_food_location = None
+
+            self.path_home = []
 
     def back_to_food(self):
+        """Improved return to food behavior"""
         if not self.path_to_food:
-            # If we've lost the path, go back to exploring
             self.state = AntState.EXPLORING
             return
 
-        next_pos = self.path_to_food.pop()
+        next_pos = self.path_to_food[0]
+        self.path_to_food = self.path_to_food[1:]
         self.move(next_pos[0], next_pos[1])
 
-        # Check if we've reached the food
-        if self.target_food and self.x == self.target_food.x and self.y == self.target_food.y:
-            if self.target_food.value > 0:
+        # Check if we reached the food location
+        if self.last_food_location and (self.x, self.y) == self.last_food_location:
+            food = next((f for f in self.env.food if f.x == self.x and f.y == self.y and f.value > 0), None)
+            if food:
                 self.carrying_food = True
-                self.target_food.value -= 1
+                food.value -= 1
                 self.state = AntState.RETURNING
-                self.path_to_food.clear()  # Clear the path as we'll make a new one
+                self.path_home = self._find_path_to_target(self.env.nest_location[0], self.env.nest_location[1])
             else:
                 self.state = AntState.EXPLORING
-                self.target_food = None
-                self.path_to_food.clear()
+                self.last_food_location = None
 
     def update(self):
         if self.state == AntState.EXPLORING:
