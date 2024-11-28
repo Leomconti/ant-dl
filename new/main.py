@@ -1,22 +1,23 @@
-import pygame
 import random
 from dataclasses import dataclass
-from typing import List, Tuple, Set, Dict, Optional
 from enum import Enum
-import numpy as np
+from typing import Dict, List, Optional, Set, Tuple
 
-# Constants
-CELL_SIZE = 10
+import pygame
+
+CELL_SIZE = 10  # px
 ANT_SIZE = CELL_SIZE
-VISION_RANGE = 2  # This creates a 5x5 vision field
+VISION_RANGE = 2
 MAX_PHEROMONE = 255
 PHEROMONE_DEPOSIT = 10
 PHEROMONE_EVAPORATION = 0.995
 MOVE_SPEED = 0.5
 
+
 class AntState(Enum):
     EXPLORING = 1
     RETURNING = 2
+
 
 @dataclass
 class Food:
@@ -24,18 +25,18 @@ class Food:
     y: int
     value: int
 
+
 class Ant:
     def __init__(self, x: float, y: float, environment):
-        self.x = float(x)
-        self.y = float(y)
-        self.direction = random.uniform(0, 2 * np.pi)
+        self.x = int(x)
+        self.y = int(y)
         self.state = AntState.EXPLORING
         self.carrying_food = False
         self.target_food: Optional[Food] = None
         self.env = environment
-        self.memory: List[Tuple[int, int]] = []  # Short-term memory to avoid getting stuck
-        self.visited_cells: Set[Tuple[int, int]] = set()  # Long-term memory of visited cells
-        self.known_walls: Set[Tuple[int, int]] = set()    # Memory of known walls
+        self.memory: List[Tuple[int, int]] = []
+        self.visited_cells: Set[Tuple[int, int]] = set()
+        self.known_walls: Set[Tuple[int, int]] = set()
 
     def get_vision_bounds(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
         x1 = max(0, int(self.x - VISION_RANGE))
@@ -44,163 +45,107 @@ class Ant:
         y2 = min(self.env.height - 1, int(self.y + VISION_RANGE + 1))
         return ((x1, y1), (x2, y2))
 
-    def get_next_position(self, direction: float) -> Tuple[float, float]:
-        next_x = self.x + np.cos(direction) * MOVE_SPEED
-        next_y = self.y + np.sin(direction) * MOVE_SPEED
-        return next_x, next_y  # Avoid rounding
+    def find_valid_direction(self) -> Tuple[int, int]:
+        # Get current vision bounds
+        (x1, y1), (x2, y2) = self.get_vision_bounds()
+        current_cell = (int(self.x), int(self.y))
 
-    def wall_ahead(self, next_x: float, next_y: float) -> bool:
-        # Improved collision detection along the path
-        x0, y0 = self.x, self.y
-        x1, y1 = next_x, next_y
-        distance = np.hypot(x1 - x0, y1 - y0)
-        steps = int(distance / 0.1) + 1  # Number of steps
+        # List all possible moves (adjacent cells)
+        possible_moves = []
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
+            new_x = int(self.x) + dx
+            new_y = int(self.y) + dy
+            new_cell = (new_x, new_y)
 
-        for i in range(1, steps + 1):
-            t = i / steps
-            xi = x0 + (x1 - x0) * t
-            yi = y0 + (y1 - y0) * t
-            cell = (int(xi), int(yi))
-            if cell in self.env.walls:
-                self.known_walls.add(cell)  # Remember this wall
-                return True
-        return False
+            # Check if move is valid
+            if (
+                x1 <= new_x <= x2
+                and y1 <= new_y <= y2
+                and new_cell not in self.env.walls
+                and new_cell not in self.known_walls
+                and new_cell not in self.memory[-3:]
+                and new_cell != current_cell
+            ):
+                possible_moves.append((dx, dy))
 
-    def find_valid_direction(self) -> float:
-        # Try 16 different directions
-        possible_directions = []
-        for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
-            test_direction = angle
-            next_x, next_y = self.get_next_position(test_direction)
-            cell = (int(next_x), int(next_y))
-            if cell in self.known_walls:
-                continue  # Skip known walls
-            if not self.wall_ahead(next_x, next_y):
-                possible_directions.append((test_direction, cell))
+        if not possible_moves:
+            return (random.randint(-1, 1), random.randint(-1, 1))
 
-        if not possible_directions:
-            # If no valid directions, try random directions
-            while True:
-                random_direction = random.uniform(0, 2 * np.pi)
-                next_x, next_y = self.get_next_position(random_direction)
-                cell = (int(next_x), int(next_y))
-                if cell not in self.known_walls and not self.wall_ahead(next_x, next_y):
-                    return random_direction
-
-        # Prioritize unvisited cells
-        unvisited_directions = [ (d, c) for d, c in possible_directions if c not in self.visited_cells ]
-        if unvisited_directions:
-            possible_directions = unvisited_directions
-
-        # If we have a specific target (food or nest)
+        # If returning to nest or going to food, choose move closest to target
         if self.state == AntState.RETURNING:
-            target_x, target_y = self.env.nest_location
+            target = self.env.nest_location
         elif self.target_food:
-            target_x, target_y = self.target_food.x, self.target_food.y
+            target = (self.target_food.x, self.target_food.y)
         else:
-            # If no target, choose a random direction among unvisited cells
-            return random.choice([d for d, c in possible_directions])
+            # Choose random valid move, preferring unvisited cells
+            move = random.choice(possible_moves)
+            return move
 
-        # Find direction closest to target while avoiding known walls and visited cells
-        dx = target_x - self.x
-        dy = target_y - self.y
-        target_angle = np.arctan2(dy, dx)
+        # Find move that gets us closest to target
+        best_move = min(
+            possible_moves,
+            key=lambda m: ((int(self.x) + m[0] - target[0]) ** 2 + (int(self.y) + m[1] - target[1]) ** 2),
+        )
+        return best_move
 
-        # Sort directions by closeness to target angle
-        possible_directions.sort(key=lambda dc: abs(np.arctan2(np.sin(dc[0] - target_angle), np.cos(dc[0] - target_angle))))
-
-        # Try directions in order of preference
-        for direction, cell in possible_directions:
-            if cell not in self.visited_cells:
-                return direction
-
-        # If all directions are visited, choose the best one
-        return possible_directions[0][0]
-
-    def move(self, next_x: float, next_y: float):
-        if not self.wall_ahead(next_x, next_y):
+    def move(self, next_x: int, next_y: int):
+        if (next_x, next_y) not in self.env.walls:
             if 0 <= next_x < self.env.width and 0 <= next_y < self.env.height:
                 self.x = next_x
                 self.y = next_y
-                current_pos = (int(self.x), int(self.y))
-                self.visited_cells.add(current_pos)  # Record visited cell
+                current_pos = (self.x, self.y)
+                self.visited_cells.add(current_pos)
                 if current_pos not in self.memory:
                     self.memory.append(current_pos)
                     if len(self.memory) > 50:
                         self.memory.pop(0)
-            else:
-                # If next position is outside the environment, adjust direction
-                self.direction = self.find_valid_direction()
-        else:
-            # If wall ahead, adjust direction
-            self.direction = self.find_valid_direction()
 
     def explore(self):
         # Check for nearby food
         for food in self.env.food:
-            if (food.value > 0 and
-                abs(food.x - self.x) < VISION_RANGE and
-                abs(food.y - self.y) < VISION_RANGE):
+            if food.value > 0 and abs(food.x - self.x) < VISION_RANGE and abs(food.y - self.y) < VISION_RANGE:
                 self.target_food = food
-                dx = food.x - self.x
-                dy = food.y - self.y
-                self.direction = np.arctan2(dy, dx)
                 break
 
-        next_x, next_y = self.get_next_position(self.direction)
+        # Get next position
+        dx, dy = self.find_valid_direction()
+        next_x = self.x + dx
+        next_y = self.y + dy
 
-        if self.wall_ahead(next_x, next_y) or (int(next_x), int(next_y)) in self.visited_cells:
-            self.direction = self.find_valid_direction()
-            next_x, next_y = self.get_next_position(self.direction)
-
+        # Move one cell
         self.move(next_x, next_y)
 
         # Check if reached food
         for food in self.env.food:
-            if (food.value > 0 and
-                int(self.x) == food.x and
-                int(self.y) == food.y):
+            if food.value > 0 and self.x == food.x and self.y == food.y:
                 self.carrying_food = True
                 self.state = AntState.RETURNING
                 self.target_food = food
                 food.value -= 1
-                self.memory = []  # Clear memory for return journey
+                self.memory = []
                 break
 
     def return_to_nest(self):
-        dx = self.env.nest_location[0] - self.x
-        dy = self.env.nest_location[1] - self.y
-        distance_to_nest = np.sqrt(dx * dx + dy * dy)
+        dx, dy = self.find_valid_direction()
+        next_x = self.x + dx
+        next_y = self.y + dy
 
-        self.direction = np.arctan2(dy, dx)
-        next_x, next_y = self.get_next_position(self.direction)
-
-        if self.wall_ahead(next_x, next_y) or (int(next_x), int(next_y)) in self.known_walls:
-            # Adjust direction to avoid walls
-            self.direction = self.find_valid_direction()
-            next_x, next_y = self.get_next_position(self.direction)
-
-        # Update pheromone
-        pos = (int(self.x), int(self.y))
+        # Update pheromone at current position
+        pos = (self.x, self.y)
         current_strength = self.env.pheromone_layer.get(pos, 0)
-        self.env.pheromone_layer[pos] = min(
-            MAX_PHEROMONE,
-            current_strength + PHEROMONE_DEPOSIT
-        )
+        self.env.pheromone_layer[pos] = min(MAX_PHEROMONE, current_strength + PHEROMONE_DEPOSIT)
 
         self.move(next_x, next_y)
 
         # Check if reached nest
-        if (int(self.x) == self.env.nest_location[0] and
-            int(self.y) == self.env.nest_location[1]):
+        if self.x == self.env.nest_location[0] and self.y == self.env.nest_location[1]:
             self.carrying_food = False
             if self.target_food and self.target_food.value > 0:
                 self.state = AntState.EXPLORING
-                self.memory = []  # Clear memory for new journey
+                self.memory = []
             else:
                 self.state = AntState.EXPLORING
                 self.target_food = None
-                self.direction = random.uniform(0, 2 * np.pi)
                 self.memory = []
 
     def update(self):
@@ -208,6 +153,7 @@ class Ant:
             self.explore()
         elif self.state == AntState.RETURNING:
             self.return_to_nest()
+
 
 class Environment:
     def __init__(self, width: int, height: int):
@@ -217,7 +163,7 @@ class Environment:
         self.food: List[Food] = []
         self.ants: List[Ant] = []
         self.pheromone_layer: Dict[Tuple[int, int], float] = {}
-        self.nest_location = (1, 1)
+        self.nest_location = (2, 2)
 
         # Initialize Pygame surfaces
         self.screen = pygame.display.set_mode((width * CELL_SIZE, height * CELL_SIZE))
@@ -228,7 +174,7 @@ class Environment:
 
         # Initialize font for food values
         pygame.font.init()
-        self.font = pygame.font.SysFont('Arial', 10)
+        self.font = pygame.font.SysFont("Arial", 10)
 
     def create_maze(self):
         # Create outer walls
@@ -250,8 +196,7 @@ class Environment:
     def would_block_path(self, pos: Tuple[int, int]) -> bool:
         # Simple check to prevent creating walls that might trap ants
         x, y = pos
-        adjacent_walls = sum(1 for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]
-                             if (x + dx, y + dy) in self.walls)
+        adjacent_walls = sum(1 for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)] if (x + dx, y + dy) in self.walls)
         return adjacent_walls >= 2
 
     def add_food(self, x: int, y: int):
@@ -285,9 +230,7 @@ class Environment:
         # Draw walls
         for wall_x, wall_y in self.walls:
             pygame.draw.rect(
-                self.wall_surface,
-                (100, 100, 100),
-                (wall_x * CELL_SIZE, wall_y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                self.wall_surface, (100, 100, 100), (wall_x * CELL_SIZE, wall_y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
             )
 
         # Draw pheromone trails
@@ -296,7 +239,7 @@ class Environment:
             pygame.draw.rect(
                 self.pheromone_surface,
                 (0, color_value, 0, color_value),  # Green with alpha
-                (x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                (x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE),
             )
 
         # Draw ant vision (optional)
@@ -305,43 +248,38 @@ class Environment:
             pygame.draw.rect(
                 self.vision_surface,
                 (200, 200, 0, 50),
-                (x1 * CELL_SIZE, y1 * CELL_SIZE,
-                 (x2 - x1) * CELL_SIZE, (y2 - y1) * CELL_SIZE)
+                (x1 * CELL_SIZE, y1 * CELL_SIZE, (x2 - x1) * CELL_SIZE, (y2 - y1) * CELL_SIZE),
             )
 
-        # Draw food and nest
+        # Draw nest
         pygame.draw.rect(
             self.entity_surface,
-            (0, 255, 0),
-            (self.nest_location[0] * CELL_SIZE, self.nest_location[1] * CELL_SIZE,
-             CELL_SIZE, CELL_SIZE)
+            (255, 192, 203),  # Pink
+            (self.nest_location[0] * CELL_SIZE, self.nest_location[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE),
         )
 
-        # Draw food with values
+        # Draw food with values - for how much food there is in the cell
         for food in self.food:
             if food.value > 0:
+                # Draw food
                 pygame.draw.rect(
-                    self.entity_surface,
-                    (255, 0, 0),
-                    (food.x * CELL_SIZE, food.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                    self.entity_surface, (255, 0, 0), (food.x * CELL_SIZE, food.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
                 )
                 # Draw food value
                 value_text = self.font.render(str(food.value), True, (255, 255, 255))
-                text_rect = value_text.get_rect(center=(
-                    food.x * CELL_SIZE + CELL_SIZE // 2,
-                    food.y * CELL_SIZE + CELL_SIZE // 2
-                ))
+                text_rect = value_text.get_rect(
+                    center=(food.x * CELL_SIZE + CELL_SIZE // 2, food.y * CELL_SIZE + CELL_SIZE // 2)
+                )
                 self.entity_surface.blit(value_text, text_rect)
 
         # Draw ants
         for ant in self.ants:
+            # Blue for exploring, orange for returning
             color = (0, 0, 255) if ant.state == AntState.EXPLORING else (255, 165, 0)
             pygame.draw.rect(
                 self.entity_surface,
                 color,
-                (ant.x * CELL_SIZE - ANT_SIZE / 2,
-                 ant.y * CELL_SIZE - ANT_SIZE / 2,
-                 ANT_SIZE, ANT_SIZE)
+                (ant.x * CELL_SIZE - ANT_SIZE / 2, ant.y * CELL_SIZE - ANT_SIZE / 2, ANT_SIZE, ANT_SIZE),
             )
 
         # Combine all layers
@@ -352,15 +290,16 @@ class Environment:
 
         pygame.display.flip()
 
+
 def main():
     pygame.init()
 
     # Create environment
-    env = Environment(80, 60)
+    env = Environment(40, 40)
     env.create_maze()
 
     # Add some food sources
-    food_positions = [(60, 40), (20, 50), (70, 10)]
+    food_positions = [(10, 10), (20, 20), (30, 30)]
     for pos in food_positions:
         env.add_food(*pos)
 
@@ -378,9 +317,10 @@ def main():
 
         env.update()
         env.render()
-        clock.tick(60)
+        clock.tick(10)
 
     pygame.quit()
+
 
 if __name__ == "__main__":
     main()
