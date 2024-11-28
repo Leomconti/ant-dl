@@ -140,6 +140,7 @@ class Ant:
         # Check if reached nest
         if self.x == self.env.nest_location[0] and self.y == self.env.nest_location[1]:
             self.carrying_food = False
+            self.env.nest_food += 1
             if self.target_food and self.target_food.value > 0:
                 self.state = AntState.EXPLORING
                 self.memory = []
@@ -164,6 +165,7 @@ class Environment:
         self.ants: List[Ant] = []
         self.pheromone_layer: Dict[Tuple[int, int], float] = {}
         self.nest_location = (2, 2)
+        self.nest_food = 0
 
         # Initialize Pygame surfaces
         self.screen = pygame.display.set_mode((width * CELL_SIZE, height * CELL_SIZE))
@@ -251,12 +253,21 @@ class Environment:
                 (x1 * CELL_SIZE, y1 * CELL_SIZE, (x2 - x1) * CELL_SIZE, (y2 - y1) * CELL_SIZE),
             )
 
-        # Draw nest
+        # Draw nest with food value
         pygame.draw.rect(
             self.entity_surface,
             (255, 192, 203),  # Pink
             (self.nest_location[0] * CELL_SIZE, self.nest_location[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE),
         )
+        # Add these lines to display nest food value
+        nest_text = self.font.render(str(self.nest_food), True, (0, 0, 0))
+        text_rect = nest_text.get_rect(
+            center=(
+                self.nest_location[0] * CELL_SIZE + CELL_SIZE // 2,
+                self.nest_location[1] * CELL_SIZE + CELL_SIZE // 2,
+            )
+        )
+        self.entity_surface.blit(nest_text, text_rect)
 
         # Draw food with values - for how much food there is in the cell
         for food in self.food:
