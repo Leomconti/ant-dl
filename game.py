@@ -1,29 +1,21 @@
-import pygame
-from maze import MazeEnvironment
+from maze import MazeEnvironment, MazeConfig
 
 def main():
-    """
-    Main function with the game loop
-    """
-    # Maze 100x100 with 8x8 pixel cells
-    env = MazeEnvironment(100, 100, 8)
+    # Create configuration
+    config = MazeConfig(
+        width=50,
+        height=50,
+        cell_size=8,
+        num_agents=20,
+        initial_food_amount=100.0,
+        pheromone_evaporation_rate=0.1,
+        pheromone_diffusion_rate=0.05,
+        wall_density=0.2
+    )
 
-    env.add_random_food(30)
-    env.spawn_random_agents(50)
-
-    running = True
-    clock = pygame.time.Clock()
-
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-        env.update()
-        env.draw()
-        clock.tick(60)
-
-    pygame.quit()
+    # Create and run environment
+    env = MazeEnvironment(config)
+    env.run()
 
 if __name__ == "__main__":
     main()
