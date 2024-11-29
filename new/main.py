@@ -360,18 +360,18 @@ class Environment:
 
         def carve_path(x: int, y: int):
             self.walls.discard((x, y))
-            # Randomize directions to make the maze more interesting
+            # Randomize directions to create the maze randoly
             directions = [(0, 2), (2, 0), (0, -2), (-2, 0)]
             random.shuffle(directions)
 
             for dx, dy in directions:
                 new_x, new_y = x + dx, y + dy
                 if 0 < new_x < self.width - 1 and 0 < new_y < self.height - 1 and (new_x, new_y) in self.walls:
-                    # Carve the wall between current cell and new cell
+                    # faz os buracos no maze
                     self.walls.discard((x + dx // 2, y + dy // 2))
                     carve_path(new_x, new_y)
 
-        # Start from a random point (but not too close to the edges)
+        # create a beggining of the maze
         start_x = random.randrange(2, self.width - 2, 2)
         start_y = random.randrange(2, self.height - 2, 2)
         carve_path(start_x, start_y)
