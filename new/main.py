@@ -205,7 +205,6 @@ class Ant:
         return path[::-1]
 
     def explore(self):
-        """Improved exploring behavior"""
         food_status = self._food_in_range()
 
         if food_status == "HERE":
@@ -215,7 +214,6 @@ class Ant:
             return
 
         if food_status == "NEARBY" and self.target_food:
-            # Path to nearby food
             path = self._find_path_to_target(self.target_food.x, self.target_food.y)
             if path:
                 next_pos = path[0]
@@ -240,13 +238,13 @@ class Ant:
         if self._check_bounds(self.x + dx, self.y + dy):
             return dx, dy
 
-        # If direct path is blocked, try horizontal or vertical movement
+        # If direct path is blocked, try horizontal or vertical movement that is not blocked
         if dx != 0 and self._check_bounds(self.x + dx, self.y):
             return dx, 0
         if dy != 0 and self._check_bounds(self.x, self.y + dy):
             return 0, dy
 
-        # If all direct paths are blocked, move randomly
+        # If all direct paths are blocked, move randomly, :P should bug and not move
         return self.find_valid_direction()
 
     def update_pheromones(self):
@@ -260,7 +258,7 @@ class Ant:
 
         # Ensure direction is one of the valid surrounding positions
         if direction not in SURROUNDINGS:
-            direction = (0, 0)  # Default to no direction if invalid
+            direction = (0, 0)
 
         deposit_amount = PHEROMONE_DEPOSIT if self.carrying_food else PHEROMONE_DEPOSIT / 2
 
@@ -272,11 +270,10 @@ class Ant:
 
         new_strength = min(MAX_PHEROMONE, current_strength + deposit_amount)
 
-        # Create new pheromone
+        # Create new pheromone if no already
         self.env.pheromone_layer[pos] = Pheromone(x=self.x, y=self.y, strength=new_strength, food_direction=direction)
 
     def return_to_nest(self):
-        """Improved return behavior"""
         self.update_pheromones()
         if not self.path_home:
             self.path_home = self._find_path_to_target(self.env.nest_location[0], self.env.nest_location[1])
@@ -290,7 +287,7 @@ class Ant:
             self.carrying_food = False
             self.env.nest_food += 1
 
-            # If we remember where we found food and it still has value, go back
+            # If we remember where we found food and it still has value, go back to it
             if self.last_food_location and any(
                 f.value > 0 and f.x == self.last_food_location[0] and f.y == self.last_food_location[1]
                 for f in self.env.food
@@ -305,7 +302,6 @@ class Ant:
             self.path_home = []
 
     def back_to_food(self):
-        """Improved return to food behavior"""
         if not self.path_to_food:
             self.state = AntState.EXPLORING
             return
@@ -347,27 +343,49 @@ class Environment:
         self.nest_location = (2, 2)
         self.nest_food = 0
 
-        # Initialize Pygame surfaces
-        self.screen = pygame.display.set_mode((width * CELL_SIZE, height * CELL_SIZE))
-        self.wall_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)
-        self.pheromone_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)
-        self.vision_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)
-        self.entity_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)
+        self.screen = pygame.display.set_mode((width * CELL_SIZE, height * CELL_SIZE))  # Main screen
+        self.wall_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)  # Walls
+        self.pheromone_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)  # Pheromones
+        self.vision_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)  # Vision
+        self.entity_surface = pygame.Surface((width * CELL_SIZE, height * CELL_SIZE), pygame.SRCALPHA)  # Entities
 
         pygame.font.init()
         self.font = pygame.font.SysFont("Arial", 10)
 
     def create_maze(self):
-        # Create outer walls only
+        # Initialize all cells as walls
         for x in range(self.width):
-            self.walls.add((x, 0))
-            self.walls.add((x, self.height - 1))
-        for y in range(self.height):
-            self.walls.add((0, y))
-            self.walls.add((self.width - 1, y))
+            for y in range(self.height):
+                self.walls.add((x, y))
 
-        # Ensure nest location is clear (although it shouldn't be a wall anyway)
+        def carve_path(x: int, y: int):
+            self.walls.discard((x, y))
+            # Randomize directions to make the maze more interesting
+            directions = [(0, 2), (2, 0), (0, -2), (-2, 0)]
+            random.shuffle(directions)
+
+            for dx, dy in directions:
+                new_x, new_y = x + dx, y + dy
+                if 0 < new_x < self.width - 1 and 0 < new_y < self.height - 1 and (new_x, new_y) in self.walls:
+                    # Carve the wall between current cell and new cell
+                    self.walls.discard((x + dx // 2, y + dy // 2))
+                    carve_path(new_x, new_y)
+
+        # Start from a random point (but not too close to the edges)
+        start_x = random.randrange(2, self.width - 2, 2)
+        start_y = random.randrange(2, self.height - 2, 2)
+        carve_path(start_x, start_y)
+
+        # Ensure the nest location and surrounding cells are clear
         self.walls.discard(self.nest_location)
+        for dx, dy in SURROUNDINGS:
+            self.walls.discard((self.nest_location[0] + dx, self.nest_location[1] + dy))
+
+        # Create some random openings to make the maze less restrictive
+        for _ in range(self.width * self.height // 20):
+            x = random.randint(1, self.width - 2)
+            y = random.randint(1, self.height - 2)
+            self.walls.discard((x, y))
 
     def would_block_path(self, pos: Tuple[int, int]) -> bool:
         # Simple check to prevent creating walls that might trap ants
@@ -381,14 +399,10 @@ class Environment:
             self.food.append(food)
 
     def add_ant(self):
-        """
-        Add ant to nest + env
-        """
         ant = Ant(self.nest_location[0], self.nest_location[1], self)
         self.ants.append(ant)
 
     def update(self):
-        """Update environment things."""
         # Update pheromone evaporation
         for pos in list(self.pheromone_layer.keys()):
             pheromone = self.pheromone_layer[pos]
@@ -485,16 +499,13 @@ class Environment:
 def main():
     pygame.init()
 
-    # Create environment
     env = Environment(50, 50)
     env.create_maze()
 
-    # Add some food sources
     food_positions = [(20, 20)]
     for pos in food_positions:
         env.add_food(*pos)
 
-    # Add some ants
     for _ in range(40):
         env.add_ant()
 
@@ -505,6 +516,12 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 3:  # Right click
+                    mouse_x, mouse_y = event.pos
+                    grid_x = mouse_x // CELL_SIZE
+                    grid_y = mouse_y // CELL_SIZE
+                    env.add_food(grid_x, grid_y)
 
         env.update()
         env.render()
