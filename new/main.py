@@ -16,6 +16,20 @@ PHEROMONE_EVAPORATION = 0.998
 MOVE_SPEED = 0.5
 
 
+@dataclass
+class Pheromone:
+    x: int
+    y: int
+    strength: float
+    food_direction: Tuple[int, int]
+
+    def get_position(self) -> Tuple[int, int]:
+        return (self.x, self.y)
+
+    def evaporate(self) -> None:
+        self.strength *= PHEROMONE_EVAPORATION
+
+
 class AntState(Enum):
     EXPLORING = 1
     RETURNING = 2
@@ -112,20 +126,44 @@ class Ant:
         return self.target_food  # Simply return the stored target food
 
     def _find_best_direction_to_explore(self) -> Tuple[int, int]:
+        # Random exploration chance to prevent getting stuck
+        if random.random() < 0.1:
+            return self.find_valid_direction()
+
         best_direction = None
         highest_pheromone = -1
+        valid_moves = []
+
         for dx, dy in SURROUNDINGS:
             next_x = self.x + dx
             next_y = self.y + dy
             if not self._check_bounds(next_x, next_y):
                 continue
-            pheromone = self.env.pheromone_layer.get((next_x, next_y), 0)
-            if pheromone > highest_pheromone:
-                highest_pheromone = pheromone
-                best_direction = (dx, dy)
-        if best_direction is not None and highest_pheromone > 0:
+
+            next_pos = (next_x, next_y)
+            # Add weight to unvisited cells
+            if next_pos not in self.visited_cells:
+                valid_moves.append((dx, dy))
+
+            if next_pos in self.env.pheromone_layer:
+                pheromone = self.env.pheromone_layer[next_pos]
+                # Add some randomness to pheromone following
+                random_factor = random.uniform(0.8, 1.2)
+                effective_strength = pheromone.strength * random_factor
+
+                if effective_strength > highest_pheromone:
+                    highest_pheromone = effective_strength
+                    best_direction = pheromone.food_direction
+
+        # If we found a good pheromone trail, follow it
+        if best_direction is not None and highest_pheromone > 20:
             return best_direction
-        # If no pheromone nearby, move randomly
+
+        # If we have valid unvisited moves, prefer those
+        if valid_moves:
+            return random.choice(valid_moves)
+
+        # Otherwise, move randomly
         return self.find_valid_direction()
 
     def _find_path_to_target(self, target_x: int, target_y: int) -> List[Tuple[int, int]]:
@@ -213,14 +251,33 @@ class Ant:
 
     def update_pheromones(self):
         pos = (self.x, self.y)
-        current_strength = self.env.pheromone_layer.get(pos, 0)
+        if not self.memory:
+            return
+
+        # Get direction from previous position
+        prev_pos = self.memory[-1] if len(self.memory) > 1 else pos
+        direction = (max(min(self.x - prev_pos[0], 1), -1), max(min(self.y - prev_pos[1], 1), -1))
+
+        # Ensure direction is one of the valid surrounding positions
+        if direction not in SURROUNDINGS:
+            direction = (0, 0)  # Default to no direction if invalid
+
         deposit_amount = PHEROMONE_DEPOSIT if self.carrying_food else PHEROMONE_DEPOSIT / 2
-        self.env.pheromone_layer[pos] = min(MAX_PHEROMONE, current_strength + deposit_amount)
+
+        # Get existing pheromone or create new one
+        if pos in self.env.pheromone_layer:
+            current_strength = self.env.pheromone_layer[pos].strength
+        else:
+            current_strength = 0
+
+        new_strength = min(MAX_PHEROMONE, current_strength + deposit_amount)
+
+        # Create new pheromone
+        self.env.pheromone_layer[pos] = Pheromone(x=self.x, y=self.y, strength=new_strength, food_direction=direction)
 
     def return_to_nest(self):
         """Improved return behavior"""
         self.update_pheromones()
-
         if not self.path_home:
             self.path_home = self._find_path_to_target(self.env.nest_location[0], self.env.nest_location[1])
 
@@ -270,6 +327,7 @@ class Ant:
                 self.last_food_location = None
 
     def update(self):
+        # Add pheromone update at the start of every update
         if self.state == AntState.EXPLORING:
             self.explore()
         elif self.state == AntState.RETURNING:
@@ -285,7 +343,7 @@ class Environment:
         self.walls: Set[Tuple[int, int]] = set()
         self.food: List[Food] = []
         self.ants: List[Ant] = []
-        self.pheromone_layer: Dict[Tuple[int, int], float] = {}
+        self.pheromone_layer: Dict[Tuple[int, int], Pheromone] = {}
         self.nest_location = (2, 2)
         self.nest_food = 0
 
@@ -330,14 +388,12 @@ class Environment:
         self.ants.append(ant)
 
     def update(self):
-        """
-        Update environment things.
-        - Pheromone evaporation
-        - And update
-        """
+        """Update environment things."""
+        # Update pheromone evaporation
         for pos in list(self.pheromone_layer.keys()):
-            self.pheromone_layer[pos] *= PHEROMONE_EVAPORATION
-            if self.pheromone_layer[pos] < 1:
+            pheromone = self.pheromone_layer[pos]
+            pheromone.evaporate()
+            if pheromone.strength < 1:
                 del self.pheromone_layer[pos]
 
         for ant in self.ants:
@@ -358,12 +414,14 @@ class Environment:
             )
 
         # Draw pheromone trails
-        for (x, y), strength in self.pheromone_layer.items():
-            color_value = min(255, int(strength))
+        for pheromone in self.pheromone_layer.values():
+            color_value = min(255, int(pheromone.strength))
+            cell_rect = pygame.Rect(pheromone.x * CELL_SIZE, pheromone.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+
             pygame.draw.rect(
                 self.pheromone_surface,
-                (0, color_value, 0, color_value),  # Green with alpha
-                (x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE),
+                (0, color_value, 0, color_value),
+                cell_rect,
             )
 
         # Draw ant vision (optional)
